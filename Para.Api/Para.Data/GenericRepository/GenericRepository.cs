@@ -52,4 +52,9 @@ public class GenericRepository<TEntity> : IGenericRepository<TEntity> where TEnt
     {
        return await dbContext.Set<TEntity>().ToListAsync();
     }
+
+    public IQueryable<TEntity> AsQueryable()
+    {
+        return dbContext.Set<TEntity>().AsQueryable();
+    }
 }

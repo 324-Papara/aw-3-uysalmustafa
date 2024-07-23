@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
 using AutoMapper;
+using FluentValidation;
+using FluentValidation.AspNetCore;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
@@ -10,109 +12,110 @@ using Para.Bussiness;
 using Para.Bussiness.Cqrs;
 using Para.Data.Context;
 using Para.Data.UnitOfWork;
+using Para.Validation;
+using Autofac;
+using Para.Base.Response;
+using Para.Bussiness.Query;
+using Para.Schema;
 
-namespace Para.Api;
-
-public class Startup
+namespace Para.Api
 {
-    public IConfiguration Configuration;
-    
-    public Startup(IConfiguration configuration)
+    public class Startup
     {
-        this.Configuration = configuration;
-    }
-    
-    
-    public void ConfigureServices(IServiceCollection services)
-    {
-               
-        services.AddControllers().AddJsonOptions(options =>
+        public IConfiguration Configuration { get; }
+
+        public Startup(IConfiguration configuration)
         {
-            options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-            options.JsonSerializerOptions.WriteIndented = true;
-            options.JsonSerializerOptions.PropertyNamingPolicy = null;
-        });
-        services.AddSwaggerGen(c =>
-        {
-            c.SwaggerDoc("v1", new OpenApiInfo { Title = "Para.Api", Version = "v1" });
-        });
-
-        var connectionStringSql = Configuration.GetConnectionString("MsSqlConnection");
-        services.AddDbContext<ParaDbContext>(options => options.UseSqlServer(connectionStringSql));
-        //services.AddDbContext<ParaDbContext>(options => options.UseNpgsql(connectionStringPostgre));
-  
-
-        services.AddScoped<IUnitOfWork, UnitOfWork>();
-
-        var config = new MapperConfiguration(cfg =>
-        {
-            cfg.AddProfile(new MapperConfig());
-        });
-        services.AddSingleton(config.CreateMapper());
-
-
-        services.AddMediatR(typeof(CreateCustomerCommand).GetTypeInfo().Assembly);
-
-        services.AddTransient<CustomService1>();
-        services.AddScoped<CustomService2>();
-        services.AddSingleton<CustomService3>();
-    }
-
-    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
-    {
-        if (env.IsDevelopment())
-        {
-            app.UseDeveloperExceptionPage();
-            app.UseSwagger();
-            app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Para.Api v1"));
+            Configuration = configuration;
         }
 
-
-        app.UseMiddleware<HeartbeatMiddleware>();
-        app.UseMiddleware<ErrorHandlerMiddleware>();
-        
-        app.UseHttpsRedirection();
-        app.UseRouting();
-        app.UseAuthorization();
-        app.UseEndpoints(endpoints =>
+        public void ConfigureServices(IServiceCollection services)
         {
-            endpoints.MapControllers();
-        });
-        
-        app.Use((context,next) =>
-        {
-            if (!string.IsNullOrEmpty(context.Request.Path) && context.Request.Path.Value.Contains("favicon"))
+            services.AddControllers().AddJsonOptions(options =>
             {
-                return next();
-            }
-            
-            var service1 = context.RequestServices.GetRequiredService<CustomService1>();
-            var service2 = context.RequestServices.GetRequiredService<CustomService2>();
-            var service3 = context.RequestServices.GetRequiredService<CustomService3>();
-
-            service1.Counter++;
-            service2.Counter++;
-            service3.Counter++;
-
-            return next();
-        });
-        
-        app.Run(async context =>
-        {
-            var service1 = context.RequestServices.GetRequiredService<CustomService1>();
-            var service2 = context.RequestServices.GetRequiredService<CustomService2>();
-            var service3 = context.RequestServices.GetRequiredService<CustomService3>();
-
-            if (!string.IsNullOrEmpty(context.Request.Path) && !context.Request.Path.Value.Contains("favicon"))
+                options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+                options.JsonSerializerOptions.WriteIndented = true;
+                options.JsonSerializerOptions.PropertyNamingPolicy = null;
+            });
+            services.AddSwaggerGen(c =>
             {
-                service1.Counter++;
-                service2.Counter++;
-                service3.Counter++;
-            }
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "Para.Api", Version = "v1" });
+            });
 
-            await context.Response.WriteAsync($"Service1 : {service1.Counter}\n");
-            await context.Response.WriteAsync($"Service2 : {service2.Counter}\n");
-            await context.Response.WriteAsync($"Service3 : {service3.Counter}\n");
-        });
+
+            var connectionStringSql = Configuration.GetConnectionString("MsSqlConnection");
+            services.AddDbContext<ParaDbContext>(options => options.UseSqlServer(connectionStringSql));
+
+
+        }
+
+        public void ConfigureContainer(ContainerBuilder builder)
+        {
+            builder.RegisterAssemblyTypes(typeof(CustomerValidator).Assembly,
+                                          typeof(CustomerDetailValidator).Assembly,
+                                          typeof(CustomerAddressValidator).Assembly,
+                                          typeof(CustomerPhoneValidator).Assembly)
+                .Where(t => t.IsClosedTypeOf(typeof(IValidator<>)))
+                .AsImplementedInterfaces();
+
+  
+            builder.RegisterType<UnitOfWork>().As<IUnitOfWork>().InstancePerLifetimeScope();
+
+
+            builder.RegisterAssemblyTypes(typeof(CreateCustomerCommand).GetTypeInfo().Assembly,
+                                          typeof(CreateCustomerDetailCommand).GetTypeInfo().Assembly,
+                                          typeof(CreateCustomerAddressCommand).GetTypeInfo().Assembly,
+                                          typeof(CreateCustomerPhoneCommand).GetTypeInfo().Assembly)
+                .AsClosedTypesOf(typeof(IRequestHandler<,>));
+
+            builder.RegisterAssemblyTypes(typeof(CustomerQueryHandler).GetTypeInfo().Assembly,
+                                          typeof(CustomerDetailQueryHandler).GetTypeInfo().Assembly,
+                                          typeof(CustomerAddressQueryHandler).GetTypeInfo().Assembly,
+                                          typeof(CustomerPhoneQueryHandler).GetTypeInfo().Assembly)
+                .AsImplementedInterfaces();
+
+            builder.RegisterAssemblyTypes(typeof(IMediator).GetTypeInfo().Assembly)
+                .AsImplementedInterfaces();
+
+
+            builder.Register(context => new MapperConfiguration(cfg =>
+            {
+                cfg.AddProfile<MapperConfig>();
+            })).AsSelf().SingleInstance();
+
+            builder.Register(c =>
+            {
+                var context = c.Resolve<IComponentContext>();
+                var config = context.Resolve<MapperConfiguration>();
+                return config.CreateMapper(context.Resolve);
+            }).As<IMapper>().InstancePerLifetimeScope();
+
+            builder.Register<ServiceFactory>(context =>
+            {
+                var componentContext = context.Resolve<IComponentContext>();
+                return t => componentContext.TryResolve(t, out var o) ? o : default!;
+            });
+        }
+
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+                app.UseSwagger();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Para.Api v1"));
+            }
+            app.UseMiddleware<LoggingMiddleware>();
+            app.UseMiddleware<HeartbeatMiddleware>();
+            app.UseMiddleware<ErrorHandlerMiddleware>();
+
+            app.UseHttpsRedirection();
+            app.UseRouting();
+            app.UseAuthorization();
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
+        }
     }
 }

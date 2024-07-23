@@ -58,5 +58,16 @@ namespace Para.Api.Controllers
             var result = await mediator.Send(operation);
             return result;
         }
+
+        [HttpGet("search")]
+        public async Task<ApiResponse<List<CustomerResponse>>> GetByParameters(
+            [FromQuery] long customerId,
+            [FromQuery] string name
+            )
+        {
+            var query = new GetCustomerByParametersQuery(customerId, name);
+            var result = await mediator.Send(query);
+            return result;
+        }
     }
 }

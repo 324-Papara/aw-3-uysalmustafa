@@ -1,5 +1,6 @@
 using AutoMapper;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Para.Base.Response;
 using Para.Bussiness.Cqrs;
 using Para.Data.Domain;
@@ -39,6 +40,23 @@ public class CustomerQueryHandler :
 
     public async Task<ApiResponse<List<CustomerResponse>>> Handle(GetCustomerByParametersQuery request, CancellationToken cancellationToken)
     {
-        throw new NotImplementedException();
+
+        IQueryable<Customer> query = unitOfWork.CustomerRepository.AsQueryable();
+
+        if (request.CustomerId > 0)
+        {
+            query = query.Where(c => c.Id == request.CustomerId);
+        }
+
+        if (!string.IsNullOrEmpty(request.Name))
+        {
+            string lowerCaseName = request.Name.ToLower();
+            query = query.Where(c => c.FirstName.ToLower().Contains(lowerCaseName) || c.LastName.ToLower().Contains(lowerCaseName));
+        }
+
+
+        List<Customer> customers = await query.ToListAsync(cancellationToken);
+        List<CustomerResponse> customerResponses = mapper.Map<List<CustomerResponse>>(customers);
+        return new ApiResponse<List<CustomerResponse>>(customerResponses);
     }
 }
